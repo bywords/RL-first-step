@@ -39,10 +39,77 @@ class Agent():
         tvars = tf.trainable_variables()
         self.gradient_holders = []
         for idx, var in enumerate(tvars):
-            placeholder = tf.placeholder(tf.float32, name="{}_holder".format(idx))
+            placeholder = tf.placeholder(tf.float32,
+                                         name="{}_holder".format(idx))
             self.gradient_holders.append(placeholder)
 
         self.gradients = tf.gradients(self.loss, tvars)
 
         optimizer = tf.train.AdamOptimizer(learning_rate=lr)
-        self.update_batch = optimizer.apply_gradients((self.gradient_holders, tvars))
+        self.update_batch = optimizer.apply_gradients(zip(self.gradient_holders, tvars))
+
+
+tf.reset_default_graph()
+
+# Load agent
+myAgent = Agent(lr=1e-2, s_size=4, a_size=2, h_size=8)
+
+# Set hyperparameters
+total_episodes = 5000
+max_ep = 999
+update_frequency = 5
+
+init = tf.global_variables_initializer()
+
+# Launch TensorFlow graph
+with tf.Session() as sess:
+    sess.run(init)
+    i = 0
+    total_reward = []
+    total_length = []
+
+    gradBuffer = sess.run(tf.trainable_variables())
+    for ix, grad in enumerate(gradBuffer):
+        gradBuffer[ix] = grad * 0
+
+    while i < total_episodes:
+        s = env.reset()
+        running_reward = 0
+        ep_history = []
+
+        for j in range(max_ep):
+            # stochastic actions
+            a_dist = sess.run(myAgent.output, feed_dict={myAgent.state_in: [s]})
+            a = np.random.choice(a_dist[0], p=a_dist[0])
+            a = np.argmax(a_dist == a)
+
+            # Get reward for taking the action
+            s1, r, d, _ = env.step(a)
+            ep_history.append([s, a, r, s1])
+            s = s1
+            running_reward += r
+            if d == True:
+                # Update the network
+                ep_history = np.array(ep_history)
+                ep_history[:, 2] = discount_rewards(ep_history[:, 2])
+                feed_dict = {myAgent.reward_holder: ep_history[:, 2],
+                             myAgent.action_holder: ep_history[:, 1],
+                             myAgent.state_in: np.vstack(ep_history[:, 0])}
+                grads = sess.run(myAgent.gradients, feed_dict=feed_dict)
+                for idx, grad in enumerate(grads):
+                    gradBuffer[idx] += grad
+
+                if i % update_frequency == 0 and i != 0:
+                    feed_dict = dict(zip(myAgent.gradient_holders, gradBuffer))
+                    _ = sess.run(myAgent.update_batch, feed_dict=feed_dict)
+                    for ix, grad in enumerate(gradBuffer):
+                        gradBuffer[ix] = grad * 0
+
+                total_reward.append(running_reward)
+                total_length.append(j)
+                break
+
+        # Update total reward
+        if i % 100 == 0:
+            print(np.mean(total_reward[-100:]))
+        i += 1
